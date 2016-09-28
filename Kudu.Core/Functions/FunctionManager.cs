@@ -1,13 +1,13 @@
-﻿using System;
-using System.Collections.Generic;
-using System.IO;
-using System.Threading.Tasks;
-using Kudu.Contracts.Tracing;
+﻿using Kudu.Contracts.Tracing;
 using Kudu.Core.Infrastructure;
 using Kudu.Core.Tracing;
-using Newtonsoft.Json.Linq;
-using System.Linq;
 using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Threading.Tasks;
 
 namespace Kudu.Core.Functions
 {
@@ -30,7 +30,7 @@ namespace Kudu.Core.Functions
                 if (!IsFunctionsSiteExtensionEnabled)
                 {
                     tracer.Trace("Functions are not enabled for this site.");
-                    return; 
+                    return;
                 }
 
                 var jwt = System.Environment.GetEnvironmentVariable(Constants.SiteRestrictedJWT);
@@ -53,11 +53,19 @@ namespace Kudu.Core.Functions
 
         private static bool IsFunctionsSiteExtensionEnabled
         {
-            get 
+            get
             {
                 var functionVersion = System.Environment.GetEnvironmentVariable("FUNCTIONS_EXTENSION_VERSION");
                 return !String.IsNullOrEmpty(functionVersion) &&
                        !String.Equals("disabled", functionVersion, StringComparison.OrdinalIgnoreCase);
+            }
+        }
+
+        private static string FunctionSiteExtensionVersion
+        {
+            get
+            {
+                return System.Environment.GetEnvironmentVariable("FUNCTIONS_EXTENSION_VERSION");
             }
         }
 
@@ -191,34 +199,71 @@ namespace Kudu.Core.Functions
             return config;
         }
 
+        private async Task<T> KeyOpHelper<T>(string name, IKeyJsonOps<T> keyOp)
+        {
+            string keyPath = GetFunctionSecretsFilePath(name);
+            string key = null;
+            if (!FileSystemHelpers.FileExists(keyPath))
+            {
+                FileSystemHelpers.EnsureDirectory(Path.GetDirectoryName(keyPath));
+                try
+                {
+                    using (var fileStream = FileSystemHelpers.OpenFile(keyPath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+                    // will fail if file exists, prevent reading prematurely
+                    // getting the lock early so no redundant work is being done
+                    {
+                        string jsonContent = keyOp.GenerateKeyUglyJson(SecurityUtility.GenerateSecretStringsKeyPair(keyOp.RequireKeyCount()), FunctionSiteExtensionVersion, out key);
+                        using (var sw = new StringWriter())
+                        using (var sr = new System.IO.StringReader(jsonContent))
+                        {
+                            new JsonTextWriter(sw) { Formatting = Formatting.Indented }.WriteToken(new JsonTextReader(sr));
+                            // if lock acquire lock return false, I wait until write finishes and read keyPath
+                            using (var streamWriter = new StreamWriter(fileStream))
+                            {
+                                await streamWriter.WriteAsync(sw.ToString());
+                                await streamWriter.FlushAsync();
+                            }
+                        }
+                    }
+                    return keyOp.GenerateKeyObject(key, name);
+                }
+                catch (Exception)
+                {
+                    // fallback to read key files
+                }
+            }
+
+            for (int timeOut = 5; timeOut >= 0; timeOut--)
+            {
+                try
+                {
+                    string jsonStr = await FileSystemHelpers.ReadAllTextFromFileAsync(keyPath);
+                    bool isEncrypted;
+                    key = keyOp.GetKeyInString(jsonStr, out isEncrypted);
+                    if (isEncrypted)
+                    {
+                        key = SecurityUtility.DecryptSecretString(key);
+                    }
+                    return keyOp.GenerateKeyObject(key, name);
+                }
+                catch (Exception)
+                {
+                    await Task.Delay(250);
+                }
+            }
+
+            throw new TimeoutException($"Fail to read {keyPath}, the file is being held by another process");
+        }
+
+
+        public async Task<MasterKey> GetMasterKeyAsync()
+        {
+            return await KeyOpHelper<MasterKey>("host", new MasterKeyJsonOps());
+        }
+
         public async Task<FunctionSecrets> GetFunctionSecretsAsync(string functionName)
         {
-            FunctionSecrets secrets;
-            string secretFilePath = GetFunctionSecretsFilePath(functionName);
-            if (FileSystemHelpers.FileExists(secretFilePath))
-            {
-                // load the secrets file
-                string secretsJson = await FileSystemHelpers.ReadAllTextFromFileAsync(secretFilePath);
-                secrets = JsonConvert.DeserializeObject<FunctionSecrets>(secretsJson);
-            }
-            else
-            {
-                // initialize with new secrets and save it
-                secrets = new FunctionSecrets
-                {
-                    Key = SecurityUtility.GenerateSecretString()
-                };
-
-                FileSystemHelpers.EnsureDirectory(Path.GetDirectoryName(secretFilePath));
-                await FileSystemHelpers.WriteAllTextToFileAsync(secretFilePath, JsonConvert.SerializeObject(secrets, Formatting.Indented));
-            }
-
-            secrets.TriggerUrl = String.Format(@"https://{0}/api/{1}?code={2}",
-                System.Environment.GetEnvironmentVariable("WEBSITE_HOSTNAME") ?? "localhost",
-                functionName,
-                secrets.Key);
-
-            return secrets;
+            return await KeyOpHelper<FunctionSecrets>(functionName, new FunctionSecretsJsonOps());
         }
 
         public async Task<JObject> GetHostConfigAsync()
