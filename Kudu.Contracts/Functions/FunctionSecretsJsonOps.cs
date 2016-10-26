@@ -6,16 +6,19 @@ namespace Kudu.Core.Functions
 {
     public class FunctionSecretsJsonOps : IKeyJsonOps<FunctionSecrets>
     {
-        public int RequireKeyCount()
+        public int NumberOfKeysInDefaultFormat
         {
-            return 1;
+            get
+            {
+                return 1;
+            }
         }
 
         // have the schema related info enclosed in this class
-        public string GenerateKeyUglyJson(Tuple<string, string>[] keyPair, string functionRt, out string unencryptedKey)
+        public string GenerateKeyJson(Tuple<string, string>[] keyPair, string functionRt, out string unencryptedKey)
         {
             unencryptedKey = keyPair[0].Item1;
-            if (string.CompareOrdinal(functionRt, "~0.7") < 0)
+            if (string.CompareOrdinal(functionRt, Constants.FunctionKeyNewFormat) < 0)
             {
                 return $"{{\"key\":\"{unencryptedKey}\"}}";
             }
@@ -25,7 +28,7 @@ namespace Kudu.Core.Functions
             }
         }
 
-        public string GetKeyInString(string json, out bool isEncrypted)
+        public string GetKeyValueFromJson(string json, out bool isEncrypted)
         {
             try
             {
@@ -59,10 +62,8 @@ namespace Kudu.Core.Functions
             catch (JsonException)
             {
                 // all parse issue ==> format exception
-                throw new FormatException("Invalid secrets file format.");
             }
-            isEncrypted = false;
-            return null;
+            throw new FormatException($"Invalid secrets json: {json}");
         }
 
         public FunctionSecrets GenerateKeyObject(string functionKey, string functionName)

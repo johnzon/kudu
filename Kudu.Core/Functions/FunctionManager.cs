@@ -199,7 +199,7 @@ namespace Kudu.Core.Functions
             return config;
         }
 
-        private async Task<T> KeyOpHelper<T>(string name, IKeyJsonOps<T> keyOp)
+        private async Task<T> GetKeyObjectFromFile<T>(string name, IKeyJsonOps<T> keyOp)
         {
             string keyPath = GetFunctionSecretsFilePath(name);
             string key = null;
@@ -212,7 +212,7 @@ namespace Kudu.Core.Functions
                     // will fail if file exists, prevent reading prematurely
                     // getting the lock early so no redundant work is being done
                     {
-                        string jsonContent = keyOp.GenerateKeyUglyJson(SecurityUtility.GenerateSecretStringsKeyPair(keyOp.RequireKeyCount()), FunctionSiteExtensionVersion, out key);
+                        string jsonContent = keyOp.GenerateKeyJson(SecurityUtility.GenerateSecretStringsKeyPair(keyOp.NumberOfKeysInDefaultFormat), FunctionSiteExtensionVersion, out key);
                         using (var sw = new StringWriter())
                         using (var sr = new System.IO.StringReader(jsonContent))
                         {
@@ -233,37 +233,45 @@ namespace Kudu.Core.Functions
                 }
             }
 
-            for (int timeOut = 5; timeOut >= 0; timeOut--)
+            string jsonStr = null;
+            int timeOut = 5;
+            while(true)
             {
                 try
                 {
-                    string jsonStr = await FileSystemHelpers.ReadAllTextFromFileAsync(keyPath);
-                    bool isEncrypted;
-                    key = keyOp.GetKeyInString(jsonStr, out isEncrypted);
-                    if (isEncrypted)
-                    {
-                        key = SecurityUtility.DecryptSecretString(key);
-                    }
-                    return keyOp.GenerateKeyObject(key, name);
+                    jsonStr = await FileSystemHelpers.ReadAllTextFromFileAsync(keyPath);
+                    break;
                 }
                 catch (Exception)
                 {
+                    if(timeOut == 0)
+                    {
+                        throw new TimeoutException($"Fail to read {keyPath}, the file is being held by another process");
+                    }
+                    timeOut--;
                     await Task.Delay(250);
                 }
             }
 
-            throw new TimeoutException($"Fail to read {keyPath}, the file is being held by another process");
+            bool isEncrypted;
+            key = keyOp.GetKeyValueFromJson(jsonStr, out isEncrypted);
+            if (isEncrypted)
+            {
+                key = SecurityUtility.DecryptSecretString(key);
+            }
+            return keyOp.GenerateKeyObject(key, name);
+
         }
 
 
         public async Task<MasterKey> GetMasterKeyAsync()
         {
-            return await KeyOpHelper<MasterKey>("host", new MasterKeyJsonOps());
+            return await GetKeyObjectFromFile<MasterKey>("host", new MasterKeyJsonOps());
         }
 
         public async Task<FunctionSecrets> GetFunctionSecretsAsync(string functionName)
         {
-            return await KeyOpHelper<FunctionSecrets>(functionName, new FunctionSecretsJsonOps());
+            return await GetKeyObjectFromFile<FunctionSecrets>(functionName, new FunctionSecretsJsonOps());
         }
 
         public async Task<JObject> GetHostConfigAsync()

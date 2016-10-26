@@ -6,15 +6,18 @@ namespace Kudu.Core.Functions
 {
     public class MasterKeyJsonOps : IKeyJsonOps<MasterKey>
     {
-        public int RequireKeyCount()
+        public int NumberOfKeysInDefaultFormat
         {
-            return 2;
+            get
+            {
+                return 2; // 1 masterkey, 1 functionkey in host.json
+            }
         }
 
-        public string GenerateKeyUglyJson(Tuple<string, string>[] keyPair, string functionRt, out string unencryptedKey)
+        public string GenerateKeyJson(Tuple<string, string>[] keyPair, string functionRt, out string unencryptedKey)
         {
             unencryptedKey = keyPair[0].Item1;
-            if (string.CompareOrdinal(functionRt, "~0.7") < 0)
+            if (string.CompareOrdinal(functionRt, Constants.FunctionKeyNewFormat) < 0)
             {
                 return $"{{\"masterKey\":\"{unencryptedKey}\",\"functionKey\":\"{keyPair[1].Item1}\"}}";
             }
@@ -24,7 +27,7 @@ namespace Kudu.Core.Functions
             }
         }
 
-        public string GetKeyInString(string json, out bool isEncrypted)
+        public string GetKeyValueFromJson(string json, out bool isEncrypted)
         {
             try
             {
@@ -45,7 +48,7 @@ namespace Kudu.Core.Functions
             {
                 // all parse issue ==> format exception
             }
-            throw new FormatException("Invalid secrets file format.");
+            throw new FormatException($"Invalid secrets json: {json}");
         }
 
         public MasterKey GenerateKeyObject(string masterKey, string Name)
