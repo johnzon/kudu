@@ -55,7 +55,7 @@ namespace Kudu.Core.Functions
         {
             get
             {
-                var functionVersion = System.Environment.GetEnvironmentVariable("FUNCTIONS_EXTENSION_VERSION");
+                var functionVersion = System.Environment.GetEnvironmentVariable(Constants.FunctionRunTimeVersion);
                 return !String.IsNullOrEmpty(functionVersion) &&
                        !String.Equals("disabled", functionVersion, StringComparison.OrdinalIgnoreCase);
             }
@@ -65,7 +65,7 @@ namespace Kudu.Core.Functions
         {
             get
             {
-                return System.Environment.GetEnvironmentVariable("FUNCTIONS_EXTENSION_VERSION");
+                return System.Environment.GetEnvironmentVariable(Constants.FunctionRunTimeVersion);
             }
         }
 

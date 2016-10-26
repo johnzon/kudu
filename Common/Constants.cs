@@ -104,5 +104,6 @@ namespace Kudu
         public const string SampleData = "sampledata";
         public const string FunctionsPortal = "FunctionsPortal";
         public const string FunctionKeyNewFormat = "~0.7";
+        public const string FunctionRunTimeVersion = "FUNCTIONS_EXTENSION_VERSION";
     }
 }
